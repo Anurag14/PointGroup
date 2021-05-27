@@ -16,7 +16,7 @@ from util import utils
 
 class ResidualBlock(ME.MinkowskiNetwork):
     def __init__(self, in_channels, out_channels, norm_fn):
-        super().__init__()
+        super().__init__(3)
 
         if in_channels == out_channels:
             self.i_branch = nn.Sequential(
@@ -28,16 +28,16 @@ class ResidualBlock(ME.MinkowskiNetwork):
             )
 
         self.conv_branch = nn.Sequential(
-            norm_fn(in_channels),
-            ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3),
+            norm_fn(in_channels)
+            ME.MinkowskiReLU()
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=3)
             norm_fn(out_channels),
             ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3)
+            self.conv2 = ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, bias=False, dimension=3)
         )
 
     def forward(self, input):
-        identity = ME.SparseTensor(input.features, input.indices, input.spatial_shape, input.batch_size)
+        identity = ME.SparseTensor(input.features,input.coordinates)
 
         output = self.conv_branch(input)
         output.features += self.i_branch(identity).features
@@ -47,12 +47,12 @@ class ResidualBlock(ME.MinkowskiNetwork):
 
 class VGGBlock(ME.MinkowskiNetwork):
     def __init__(self, in_channels, out_channels, norm_fn):
-        super().__init__()
+        super().__init__(3)
 
         self.conv_layers = nn.Sequential(
             norm_fn(in_channels),
             ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3)
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=3)
         )
 
     def forward(self, input):
@@ -144,7 +144,7 @@ class PointGroup(nn.Module):
 
         #### backbone
         self.input_conv = nn.Sequential(
-            ME.MinkowskiConvolution(input_c, m, kernel_size=3, padding=1, bias=False)
+            ME.MinkowskiConvolution(input_c, m, kernel_size=3, bias=False, dimension =3)
         )
 
         self.unet = UBlock([m, 2*m, 3*m, 4*m, 5*m, 6*m, 7*m], norm_fn, block_reps, block)
@@ -339,13 +339,12 @@ def model_fn_decorator(test=False):
 
         batch_offsets = batch['offsets'].cuda()    # (B + 1), int, cuda
 
-        spatial_shape = batch['spatial_shape']
 
         if cfg.use_coords:
             feats = torch.cat((feats, coords_float), 1)
         voxel_feats = pointgroup_ops.voxelization(feats, v2p_map, cfg.mode)  # (M, C), float, cuda
 
-        input_ = ME.SparseTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
+        input_ = ME.SparseTensor(voxel_feats, coordinates=voxel_coords.int())
 
         ret = model(input_, p2v_map, coords_float, coords[:, 0].int(), batch_offsets, epoch)
         semantic_scores = ret['semantic_scores']  # (N, nClass) float32, cuda
@@ -386,13 +385,11 @@ def model_fn_decorator(test=False):
 
         batch_offsets = batch['offsets'].cuda()                # (B + 1), int, cuda
 
-        spatial_shape = batch['spatial_shape']
-
         if cfg.use_coords:
             feats = torch.cat((feats, coords_float), 1)
         voxel_feats = pointgroup_ops.voxelization(feats, v2p_map, cfg.mode)  # (M, C), float, cuda
 
-        input_ = ME.SparseTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
+        input_ = ME.SparseTensor(voxel_feats,coordinates=voxel_coords.int())
 
         ret = model(input_, p2v_map, coords_float, coords[:, 0].int(), batch_offsets, epoch)
         semantic_scores = ret['semantic_scores'] # (N, nClass) float32, cuda
