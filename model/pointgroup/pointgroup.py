@@ -15,7 +15,7 @@ from lib.pointgroup_ops.functions import pointgroup_ops
 from util import utils
 
 class ResidualBlock(ME.MinkowskiNetwork):
-    def __init__(self, in_channels, out_channels, norm_fn, indice_key=None):
+    def __init__(self, in_channels, out_channels, norm_fn):
         super().__init__()
 
         if in_channels == out_channels:
@@ -30,10 +30,10 @@ class ResidualBlock(ME.MinkowskiNetwork):
         self.conv_branch = nn.Sequential(
             norm_fn(in_channels),
             ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key),
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3),
             norm_fn(out_channels),
             ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
+            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3)
         )
 
     def forward(self, input):
@@ -46,13 +46,13 @@ class ResidualBlock(ME.MinkowskiNetwork):
 
 
 class VGGBlock(ME.MinkowskiNetwork):
-    def __init__(self, in_channels, out_channels, norm_fn, indice_key=None):
+    def __init__(self, in_channels, out_channels, norm_fn):
         super().__init__()
 
         self.conv_layers = nn.Sequential(
             norm_fn(in_channels),
             ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, dimension=3)
         )
 
     def forward(self, input):
@@ -60,13 +60,13 @@ class VGGBlock(ME.MinkowskiNetwork):
 
 
 class UBlock(nn.Module):
-    def __init__(self, nPlanes, norm_fn, block_reps, block, indice_key_id=1):
+    def __init__(self, nPlanes, norm_fn, block_reps, block):
 
         super().__init__()
 
         self.nPlanes = nPlanes
 
-        blocks = {'block{}'.format(i): block(nPlanes[0], nPlanes[0], norm_fn, indice_key='subm{}'.format(indice_key_id)) for i in range(block_reps)}
+        blocks = {'block{}'.format(i): block(nPlanes[0], nPlanes[0], norm_fn) for i in range(block_reps)}
         blocks = OrderedDict(blocks)
         self.blocks = nn.Sequential(blocks)
 
@@ -74,20 +74,20 @@ class UBlock(nn.Module):
             self.conv = nn.Sequential(
                 norm_fn(nPlanes[0]),
                 ME.MinkowskiReLU(),
-                ME.MinkowskiConvolution(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
+                ME.MinkowskiConvolution(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, dimension=3)
             )
 
-            self.u = UBlock(nPlanes[1:], norm_fn, block_reps, block, indice_key_id=indice_key_id+1)
+            self.u = UBlock(nPlanes[1:], norm_fn, block_reps, block)
 
             self.deconv = nn.Sequential(
                 norm_fn(nPlanes[1]),
                 ME.MinkowskiReLU(),
-                ME.MinkowskiConvolutionTranspose(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
+                ME.MinkowskiConvolutionTranspose(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, dimension=3)
             )
 
             blocks_tail = {}
             for i in range(block_reps):
-                blocks_tail['block{}'.format(i)] = block(nPlanes[0] * (2 - i), nPlanes[0], norm_fn, indice_key='subm{}'.format(indice_key_id))
+                blocks_tail['block{}'.format(i)] = block(nPlanes[0] * (2 - i), nPlanes[0], norm_fn)
             blocks_tail = OrderedDict(blocks_tail)
             self.blocks_tail = nn.Sequential(blocks_tail)
 
@@ -144,10 +144,10 @@ class PointGroup(nn.Module):
 
         #### backbone
         self.input_conv = nn.Sequential(
-            ME.MinkowskiConvolution(input_c, m, kernel_size=3, padding=1, bias=False, indice_key='subm1')
+            ME.MinkowskiConvolution(input_c, m, kernel_size=3, padding=1, bias=False)
         )
 
-        self.unet = UBlock([m, 2*m, 3*m, 4*m, 5*m, 6*m, 7*m], norm_fn, block_reps, block, indice_key_id=1)
+        self.unet = UBlock([m, 2*m, 3*m, 4*m, 5*m, 6*m, 7*m], norm_fn, block_reps, block)
 
         self.output_layer = nn.Sequential(
             norm_fn(m),
@@ -166,7 +166,7 @@ class PointGroup(nn.Module):
         self.offset_linear = nn.Linear(m, 3, bias=True)
 
         #### score branch
-        self.score_unet = UBlock([m, 2*m], norm_fn, 2, block, indice_key_id=1)
+        self.score_unet = UBlock([m, 2*m], norm_fn, 2, block)
         self.score_outputlayer = nn.Sequential(
             norm_fn(m),
             nn.ReLU()
