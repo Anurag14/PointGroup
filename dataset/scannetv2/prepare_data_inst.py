@@ -22,6 +22,7 @@ if opt.data_split != 'test':
     files2 = sorted(glob.glob(split + '/*_vh_clean_2.labels.ply'))
     files3 = sorted(glob.glob(split + '/*_vh_clean_2.0.010000.segs.json'))
     files4 = sorted(glob.glob(split + '/*[0-9].aggregation.json'))
+    print(len(files), len(files2), len(files3))
     assert len(files) == len(files2)
     assert len(files) == len(files3)
     assert len(files) == len(files4), "{} {}".format(len(files), len(files4))

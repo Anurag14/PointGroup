@@ -5,9 +5,8 @@ Written by Li Jiang
 
 import torch
 import torch.nn as nn
-import spconv
-from spconv.modules import SparseModule
 import functools
+import MinkowskiEngine as ME
 from collections import OrderedDict
 import sys
 sys.path.append('../../')
@@ -15,30 +14,30 @@ sys.path.append('../../')
 from lib.pointgroup_ops.functions import pointgroup_ops
 from util import utils
 
-class ResidualBlock(SparseModule):
+class ResidualBlock(ME.MinkowskiNetwork):
     def __init__(self, in_channels, out_channels, norm_fn, indice_key=None):
         super().__init__()
 
         if in_channels == out_channels:
-            self.i_branch = spconv.SparseSequential(
+            self.i_branch = nn.Sequential(
                 nn.Identity()
             )
         else:
-            self.i_branch = spconv.SparseSequential(
-                spconv.SubMConv3d(in_channels, out_channels, kernel_size=1, bias=False)
+            self.i_branch = nn.Sequential(
+                ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=1, bias=False, dimension=3)
             )
 
-        self.conv_branch = spconv.SparseSequential(
+        self.conv_branch = nn.Sequential(
             norm_fn(in_channels),
-            nn.ReLU(),
-            spconv.SubMConv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key),
+            ME.MinkowskiReLU(),
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key),
             norm_fn(out_channels),
-            nn.ReLU(),
-            spconv.SubMConv3d(out_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
+            ME.MinkowskiReLU(),
+            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
         )
 
     def forward(self, input):
-        identity = spconv.SparseConvTensor(input.features, input.indices, input.spatial_shape, input.batch_size)
+        identity = ME.SparseTensor(input.features, input.indices, input.spatial_shape, input.batch_size)
 
         output = self.conv_branch(input)
         output.features += self.i_branch(identity).features
@@ -46,14 +45,14 @@ class ResidualBlock(SparseModule):
         return output
 
 
-class VGGBlock(SparseModule):
+class VGGBlock(ME.MinkowskiNetwork):
     def __init__(self, in_channels, out_channels, norm_fn, indice_key=None):
         super().__init__()
 
-        self.conv_layers = spconv.SparseSequential(
+        self.conv_layers = nn.Sequential(
             norm_fn(in_channels),
-            nn.ReLU(),
-            spconv.SubMConv3d(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
+            ME.MinkowskiReLU(),
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, padding=1, bias=False, indice_key=indice_key)
         )
 
     def forward(self, input):
@@ -69,32 +68,32 @@ class UBlock(nn.Module):
 
         blocks = {'block{}'.format(i): block(nPlanes[0], nPlanes[0], norm_fn, indice_key='subm{}'.format(indice_key_id)) for i in range(block_reps)}
         blocks = OrderedDict(blocks)
-        self.blocks = spconv.SparseSequential(blocks)
+        self.blocks = nn.Sequential(blocks)
 
         if len(nPlanes) > 1:
-            self.conv = spconv.SparseSequential(
+            self.conv = nn.Sequential(
                 norm_fn(nPlanes[0]),
-                nn.ReLU(),
-                spconv.SparseConv3d(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
+                ME.MinkowskiReLU(),
+                ME.MinkowskiConvolution(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
             )
 
             self.u = UBlock(nPlanes[1:], norm_fn, block_reps, block, indice_key_id=indice_key_id+1)
 
-            self.deconv = spconv.SparseSequential(
+            self.deconv = nn.Sequential(
                 norm_fn(nPlanes[1]),
-                nn.ReLU(),
-                spconv.SparseInverseConv3d(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
+                ME.MinkowskiReLU(),
+                ME.MinkowskiConvolutionTranspose(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, indice_key='spconv{}'.format(indice_key_id))
             )
 
             blocks_tail = {}
             for i in range(block_reps):
                 blocks_tail['block{}'.format(i)] = block(nPlanes[0] * (2 - i), nPlanes[0], norm_fn, indice_key='subm{}'.format(indice_key_id))
             blocks_tail = OrderedDict(blocks_tail)
-            self.blocks_tail = spconv.SparseSequential(blocks_tail)
+            self.blocks_tail = nn.Sequential(blocks_tail)
 
     def forward(self, input):
         output = self.blocks(input)
-        identity = spconv.SparseConvTensor(output.features, output.indices, output.spatial_shape, output.batch_size)
+        identity = ME.SparseTensor(output.features, output.indices, output.spatial_shape, output.batch_size)
 
         if len(self.nPlanes) > 1:
             output_decoder = self.conv(output)
@@ -144,13 +143,13 @@ class PointGroup(nn.Module):
             input_c += 3
 
         #### backbone
-        self.input_conv = spconv.SparseSequential(
-            spconv.SubMConv3d(input_c, m, kernel_size=3, padding=1, bias=False, indice_key='subm1')
+        self.input_conv = nn.Sequential(
+            ME.MinkowskiConvolution(input_c, m, kernel_size=3, padding=1, bias=False, indice_key='subm1')
         )
 
         self.unet = UBlock([m, 2*m, 3*m, 4*m, 5*m, 6*m, 7*m], norm_fn, block_reps, block, indice_key_id=1)
 
-        self.output_layer = spconv.SparseSequential(
+        self.output_layer = nn.Sequential(
             norm_fn(m),
             nn.ReLU()
         )
@@ -168,7 +167,7 @@ class PointGroup(nn.Module):
 
         #### score branch
         self.score_unet = UBlock([m, 2*m], norm_fn, 2, block, indice_key_id=1)
-        self.score_outputlayer = spconv.SparseSequential(
+        self.score_outputlayer = nn.Sequential(
             norm_fn(m),
             nn.ReLU()
         )
@@ -247,7 +246,7 @@ class PointGroup(nn.Module):
         out_feats = pointgroup_ops.voxelization(clusters_feats, out_map.cuda(), mode)  # (M, C), float, cuda
 
         spatial_shape = [fullscale] * 3
-        voxelization_feats = spconv.SparseConvTensor(out_feats, out_coords.int().cuda(), spatial_shape, int(clusters_idx[-1, 0]) + 1)
+        voxelization_feats = ME.SparseTensor(out_feats, out_coords.int().cuda(), spatial_shape, int(clusters_idx[-1, 0]) + 1)
 
         return voxelization_feats, inp_map
 
@@ -346,7 +345,7 @@ def model_fn_decorator(test=False):
             feats = torch.cat((feats, coords_float), 1)
         voxel_feats = pointgroup_ops.voxelization(feats, v2p_map, cfg.mode)  # (M, C), float, cuda
 
-        input_ = spconv.SparseConvTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
+        input_ = ME.SparseTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
 
         ret = model(input_, p2v_map, coords_float, coords[:, 0].int(), batch_offsets, epoch)
         semantic_scores = ret['semantic_scores']  # (N, nClass) float32, cuda
@@ -393,7 +392,7 @@ def model_fn_decorator(test=False):
             feats = torch.cat((feats, coords_float), 1)
         voxel_feats = pointgroup_ops.voxelization(feats, v2p_map, cfg.mode)  # (M, C), float, cuda
 
-        input_ = spconv.SparseConvTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
+        input_ = ME.SparseTensor(voxel_feats, voxel_coords.int(), spatial_shape, cfg.batch_size)
 
         ret = model(input_, p2v_map, coords_float, coords[:, 0].int(), batch_offsets, epoch)
         semantic_scores = ret['semantic_scores'] # (N, nClass) float32, cuda
