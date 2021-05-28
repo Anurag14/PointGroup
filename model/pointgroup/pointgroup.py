@@ -26,21 +26,21 @@ class ResidualBlock(ME.MinkowskiNetwork):
             self.i_branch = nn.Sequential(
                 ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=1, bias=False, dimension=3)
             )
-
         self.conv_branch = nn.Sequential(
-            norm_fn(in_channels)
-            ME.MinkowskiReLU()
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=3)
-            norm_fn(out_channels),
+            ME.MinkowskiBatchNorm(in_channels),
             ME.MinkowskiReLU(),
-            self.conv2 = ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, bias=False, dimension=3)
-        )
+            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=3),
+            ME.MinkowskiBatchNorm(out_channels),
+            ME.MinkowskiReLU(),
+            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, bias=False, dimension=3)
+            )
 
     def forward(self, input):
-        identity = ME.SparseTensor(input.features,input.coordinates)
+        identity = ME.SparseTensor(features=input.features,coordinates=input.coordinates,coordinate_manager=input.coordinate_manager)
 
         output = self.conv_branch(input)
-        output.features += self.i_branch(identity).features
+        output = output+self.i_branch(identity)
+        #output = ME.cat(output, self.i_branch(identity))
 
         return output
 
@@ -50,7 +50,7 @@ class VGGBlock(ME.MinkowskiNetwork):
         super().__init__(3)
 
         self.conv_layers = nn.Sequential(
-            norm_fn(in_channels),
+            ME.MinkowskiBatchNorm(in_channels),
             ME.MinkowskiReLU(),
             ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=3)
         )
@@ -72,7 +72,7 @@ class UBlock(nn.Module):
 
         if len(nPlanes) > 1:
             self.conv = nn.Sequential(
-                norm_fn(nPlanes[0]),
+                ME.MinkowskiBatchNorm(nPlanes[0]),
                 ME.MinkowskiReLU(),
                 ME.MinkowskiConvolution(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, dimension=3)
             )
@@ -80,7 +80,7 @@ class UBlock(nn.Module):
             self.u = UBlock(nPlanes[1:], norm_fn, block_reps, block)
 
             self.deconv = nn.Sequential(
-                norm_fn(nPlanes[1]),
+                ME.MinkowskiBatchNorm(nPlanes[1]),
                 ME.MinkowskiReLU(),
                 ME.MinkowskiConvolutionTranspose(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, dimension=3)
             )
@@ -93,14 +93,14 @@ class UBlock(nn.Module):
 
     def forward(self, input):
         output = self.blocks(input)
-        identity = ME.SparseTensor(output.features, output.indices, output.spatial_shape, output.batch_size)
+        #identity = ME.SparseTensor(output.features, coordinate_manager=output.coordinate_manager,coordinate_map_key=output.coordinate_map_key)
 
         if len(self.nPlanes) > 1:
             output_decoder = self.conv(output)
             output_decoder = self.u(output_decoder)
             output_decoder = self.deconv(output_decoder)
-
-            output.features = torch.cat((identity.features, output_decoder.features), dim=1)
+            identity = ME.SparseTensor(output.features, coordinate_manager=output_decoder.coordinate_manager,coordinate_map_key=output_decoder.coordinate_map_key)
+            output = ME.cat(identity, output_decoder)
 
             output = self.blocks_tail(output)
 
@@ -173,7 +173,7 @@ class PointGroup(nn.Module):
         )
         self.score_linear = nn.Linear(m, 1)
 
-        self.apply(self.set_bn_init)
+        #self.apply(self.set_bn_init)
 
         #### fix parameter
         module_map = {'input_conv': self.input_conv, 'unet': self.unet, 'output_layer': self.output_layer,
