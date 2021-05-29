@@ -32,37 +32,8 @@ git clone https://github.com/llijiang/PointGroup.git --recursive
 cd PointGroup
 ```
 
-(2) Install the dependent libraries.
-```
-pip install -r requirements.txt
-conda install -c bioconda google-sparsehash 
-```
 
-(3) For the SparseConv, we apply the implementation of [spconv](https://github.com/traveller59/spconv). The repository is recursively downloaded at step (1). We use the version 1.0 of spconv. 
-
-**Note:** We further modify `spconv\spconv\functional.py` to make `grad_output` contiguous. Make sure you use our modified `spconv`.
-
-* To compile `spconv`, firstly install the dependent libraries. 
-```
-conda install libboost
-conda install -c daleydeng gcc-5 # need gcc-5.4 for sparseconv
-```
-Add the `$INCLUDE_PATH$` that contains `boost` in `lib/spconv/CMakeLists.txt`. (Not necessary if it could be found.)
-```
-include_directories($INCLUDE_PATH$)
-```
-
-* Compile the `spconv` library.
-```
-cd lib/spconv
-python setup.py bdist_wheel
-```
-
-* Run `cd dist` and use pip to install the generated `.whl` file.
-
-
-
-(4) Compile the `pointgroup_ops` library.
+(2) Compile the `pointgroup_ops` library.
 ```
 cd lib/pointgroup_ops
 python setup.py develop
