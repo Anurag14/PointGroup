@@ -59,54 +59,6 @@ class VGGBlock(ME.MinkowskiNetwork):
         return self.conv_layers(input)
 
 
-class UBlock(nn.Module):
-    def __init__(self, nPlanes, norm_fn, block_reps, block):
-
-        super().__init__()
-
-        self.nPlanes = nPlanes
-
-        blocks = {'block{}'.format(i): block(nPlanes[0], nPlanes[0], norm_fn) for i in range(block_reps)}
-        blocks = OrderedDict(blocks)
-        self.blocks = nn.Sequential(blocks)
-
-        if len(nPlanes) > 1:
-            self.conv = nn.Sequential(
-                ME.MinkowskiBatchNorm(nPlanes[0]),
-                ME.MinkowskiReLU(),
-                ME.MinkowskiConvolution(nPlanes[0], nPlanes[1], kernel_size=2, stride=2, bias=False, dimension=3)
-            )
-
-            self.u = UBlock(nPlanes[1:], norm_fn, block_reps, block)
-
-            self.deconv = nn.Sequential(
-                ME.MinkowskiBatchNorm(nPlanes[1]),
-                ME.MinkowskiReLU(),
-                ME.MinkowskiConvolutionTranspose(nPlanes[1], nPlanes[0], kernel_size=2, bias=False, dimension=3)
-            )
-
-            blocks_tail = {}
-            for i in range(block_reps):
-                blocks_tail['block{}'.format(i)] = block(nPlanes[0] * (2 - i), nPlanes[0], norm_fn)
-            blocks_tail = OrderedDict(blocks_tail)
-            self.blocks_tail = nn.Sequential(blocks_tail)
-
-    def forward(self, input):
-        output = self.blocks(input)
-        #identity = ME.SparseTensor(output.features, coordinate_manager=output.coordinate_manager,coordinate_map_key=output.coordinate_map_key)
-
-        if len(self.nPlanes) > 1:
-            output_decoder = self.conv(output)
-            output_decoder = self.u(output_decoder)
-            output_decoder = self.deconv(output_decoder)
-            identity = ME.SparseTensor(output.features, coordinate_manager=output_decoder.coordinate_manager,coordinate_map_key=output_decoder.coordinate_map_key)
-            output = ME.cat(identity, output_decoder)
-
-            output = self.blocks_tail(output)
-
-        return output
-
-
 
 class UNet(ME.MinkowskiNetwork):
 
