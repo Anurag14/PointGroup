@@ -15,6 +15,9 @@ sys.path.append('../../')
 from lib.pointgroup_ops.functions import pointgroup_ops
 from util import utils
 
+from model.models import load_model
+
+
 def memory():
     t = torch.cuda.get_device_properties(0).total_memory/(1024.0 * 1024.0 * 1024.0)
     r = torch.cuda.memory_reserved(0)/(1024.0 * 1024.0 * 1024.0)
@@ -23,334 +26,6 @@ def memory():
     print("total: ",t," reserved: ",r," allocated: ",a," free: ",f)
     return
 
-class ResidualBlock(ME.MinkowskiNetwork):
-    def __init__(self, in_channels, out_channels, norm_fn=None, D=3):
-        super().__init__(D)
-
-        if in_channels == out_channels:
-            self.i_branch = nn.Sequential(
-                nn.Identity()
-            )
-        else:
-            self.i_branch = nn.Sequential(
-                ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=1, bias=False, dimension=D)
-            )
-        self.conv_branch = nn.Sequential(
-            ME.MinkowskiBatchNorm(in_channels,eps=1e-4),
-            ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=D),
-            ME.MinkowskiBatchNorm(out_channels,eps=1e-4),
-            ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(out_channels, out_channels, kernel_size=3, bias=False, dimension=D)
-            )
-
-    def forward(self, input):
-        #identity = ME.SparseTensor(features=input.features, coordinates=input.coordinates,coordinate_manager=input.coordinate_manager)
-        output = self.conv_branch(input)
-        output += self.i_branch(input)
-
-        return output
-
-
-class VGGBlock(ME.MinkowskiNetwork):
-    def __init__(self, in_channels, out_channels, D):
-        super().__init__(D)
-
-        self.conv_layers = nn.Sequential(
-            ME.MinkowskiBatchNorm(in_channels,eps=1e-4),
-            ME.MinkowskiReLU(),
-            ME.MinkowskiConvolution(in_channels, out_channels, kernel_size=3, bias=False, dimension=D)
-        )
-
-    def forward(self, input):
-        return self.conv_layers(input)
-
-
-class UNet_small(ME.MinkowskiNetwork):
-    def __init__(self, nPlanes, block, D=3):
-        super(UNet_small, self).__init__(D)
-        self.nPlanes = nPlanes
-        self.block_0 = torch.nn.Sequential(
-                          block(nPlanes[0] , nPlanes[0], D),
-                          block(nPlanes[0] , nPlanes[0], D))
-        self.conv_block_0=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[0]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[0],
-                          out_channels=nPlanes[1],
-                          kernel_size=2,
-                          dimension=D))
-        
-        self.deconv_block_0=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[1]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[1],
-                          out_channels=nPlanes[0],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_0 = torch.nn.Sequential(
-                          block(nPlanes[0]*2 , nPlanes[0], D),
-                          block(nPlanes[0] , nPlanes[0], D))
-    def forward(self, x):
-        out_0 = self.block_0(x)
-        x  = self.conv_block_0(out_0)
-
-        x = self.deconv_block_0(x)
-        x = ME.cat(x,out_0)
-        x = self.block_tail_0(x)
-        return x
-
-class UNet_Big(ME.MinkowskiNetwork):
-    def __init__(self, nPlanes, block, D=3):
-        super(UNet_Big, self).__init__(D)
-        self.nPlanes = nPlanes
-        self.block_0 = torch.nn.Sequential(
-                          block(nPlanes[0] , nPlanes[0], D),
-                          block(nPlanes[0] , nPlanes[0], D))
-        self.conv_block_0=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[0]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[0],
-                          out_channels=nPlanes[1],
-                          kernel_size=2,
-                          dimension=D))
-       
-        self.block_1 = torch.nn.Sequential(
-                          block(nPlanes[1] , nPlanes[1], D),
-                          block(nPlanes[1] , nPlanes[1], D))
-        self.conv_block_1=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[1]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[1],
-                          out_channels=nPlanes[2],
-                          kernel_size=2,
-                          dimension=D))
-        
-        self.block_2 = torch.nn.Sequential(
-                          block(nPlanes[2] , nPlanes[2], D),
-                          block(nPlanes[2] , nPlanes[2], D))
-        self.conv_block_2=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[2]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[2],
-                          out_channels=nPlanes[3],
-                          kernel_size=2,
-                          dimension=D))
-        
-        self.block_3 = torch.nn.Sequential(
-                          block(nPlanes[3] , nPlanes[3], D),
-                          block(nPlanes[3] , nPlanes[3], D))
-        self.conv_block_3=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[3]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[3],
-                          out_channels=nPlanes[4],
-                          kernel_size=2,
-                          dimension=D))
-        
-        self.block_4 = torch.nn.Sequential(
-                          block(nPlanes[4] , nPlanes[4], D),
-                          block(nPlanes[4] , nPlanes[4], D))
-        self.conv_block_4=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[4]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[4],
-                          out_channels=nPlanes[5],
-                          kernel_size=2,
-                          dimension=D))
-        
-        self.block_5 = torch.nn.Sequential(
-                          block(nPlanes[5] , nPlanes[5], D),
-                          block(nPlanes[5] , nPlanes[5], D))
-        self.conv_block_5=nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[5]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolution(
-                          in_channels=nPlanes[5],
-                          out_channels=nPlanes[6],
-                          kernel_size=2,
-                          dimension=D))
-
-        self.deconv_block_5=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[6]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[6],
-                          out_channels=nPlanes[5],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_5 = torch.nn.Sequential(
-                          block(nPlanes[5]*2 , nPlanes[5], D),
-                          block(nPlanes[5] , nPlanes[5], D))
-        self.deconv_block_4=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[5]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[5],
-                          out_channels=nPlanes[4],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_4 = torch.nn.Sequential(
-                          block(nPlanes[4]*2 , nPlanes[4], D),
-                          block(nPlanes[4] , nPlanes[4], D))
-        self.deconv_block_3=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[4]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[4],
-                          out_channels=nPlanes[3],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_3 = torch.nn.Sequential(
-                          block(nPlanes[3]*2 , nPlanes[3], D),
-                          block(nPlanes[3] , nPlanes[3], D))
-        self.deconv_block_2=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[3]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[3],
-                          out_channels=nPlanes[2],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_2 = torch.nn.Sequential(
-                          block(nPlanes[2]*2 , nPlanes[2], D),
-                          block(nPlanes[2] , nPlanes[2], D))
-        self.deconv_block_1=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[2]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[2],
-                          out_channels=nPlanes[1],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_1 = torch.nn.Sequential(
-                          block(nPlanes[1]*2 , nPlanes[1], D),
-                          block(nPlanes[1] , nPlanes[1], D))
-        self.deconv_block_0=torch.nn.Sequential(
-                          ME.MinkowskiBatchNorm(nPlanes[1]),
-                          ME.MinkowskiReLU(),
-                          ME.MinkowskiConvolutionTranspose(
-                          in_channels=nPlanes[1],
-                          out_channels=nPlanes[0],
-                          kernel_size=2,
-                          dimension=D))
-        self.blocks_tail_0 = torch.nn.Sequential(
-                          block(nPlanes[0]*2 , nPlanes[0], D),
-                          block(nPlanes[0] , nPlanes[0], D))
-    def forward(self,x):
-        memory()
-        out_0 = self.block_0(x)
-        x  = self.conv_block_0(out_0)
-        
-        out_1 = self.block_1(x)
-        x  = self.conv_block_1(out_1)
-        
-        out_2 = self.block_2(x)
-        x  = self.conv_block_2(out_2)
-        
-        out_3 = self.block_3(x)
-        x  = self.conv_block_3(out_3)
-        
-        out_4 = self.block_4(x)
-        x  = self.conv_block_4(out_4)
-     
-        out_5 = self.block_5(x)
-        x  = self.conv_block_5(out_5)
-        memory()
-        # decoder begins
-        x = self.deconv_block_5(x)
-        x = ME.cat(x,out_5)
-        x = self.blocks_tail_5(x)
-        
-        x = self.deconv_block_4(x)
-        x = ME.cat(x,out_4)
-        x = self.blocks_tail_4(x)
-
-        x = self.deconv_block_3(x)
-        x = ME.cat(x,out_3)
-        x = self.blocks_tail_3(x)
-
-        x = self.deconv_block_2(x)
-        x = ME.cat(x,out_2)
-        x = self.blocks_tail_2(x)
-
-        x = self.deconv_block_1(x)
-        x = ME.cat(x,out_1)
-        x = self.blocks_tail_1(x)
-        
-        x = self.deconv_block_0(x)
-        x = ME.cat(x,out_0)
-        x = self.blocks_tail_0(x)
-        memory()
-
-        return x
-        
-
-class UNet(ME.MinkowskiNetwork):
-
-    def __init__(self, nPlanes, block_reps, block, D=3):
-        super(UNet, self).__init__(D)
-        self.nPlanes = nPlanes
-        self.block_layers = []
-        self.encoder_layers = []
-        self.decoder_layers = []
-        self.block_tail_layers = []
-        self.length_of_nplanes = len(nPlanes)
-        for i in range(len(nPlanes)-1):
-            blocks = [block(nPlanes[i], nPlanes[i], D) for j in range(block_reps)]
-            blocks = nn.Sequential(*blocks)
-            conv_block=nn.Sequential(
-                    ME.MinkowskiBatchNorm(nPlanes[i]),
-                    ME.MinkowskiReLU(),
-                    ME.MinkowskiConvolution(
-                        in_channels=nPlanes[i],
-                        out_channels=nPlanes[i+1],
-                        kernel_size=2,
-                        dimension=D))
-            self.block_layers.append(blocks)
-            self.encoder_layers.append(conv_block)
-            
-            deconv_block=torch.nn.Sequential(
-                        ME.MinkowskiBatchNorm(nPlanes[self.length_of_nplanes-i-1]),
-                        ME.MinkowskiReLU(),
-                        ME.MinkowskiConvolutionTranspose(
-                        in_channels=nPlanes[self.length_of_nplanes-i-1],
-                        out_channels=nPlanes[self.length_of_nplanes-i-2],
-                        kernel_size=2,
-                        dimension=D))
-            blocks_tail = []
-            for j in range(block_reps):
-                blocks_tail.append(block(nPlanes[self.length_of_nplanes-i-2] * (2 - j), nPlanes[self.length_of_nplanes-i-2]))
-            blocks_tail = torch.nn.Sequential(*blocks_tail)
-            self.decoder_layers.append(deconv_block)
-            self.block_tail_layers.append(blocks_tail)
-            self.block_layers=nn.ModuleList(self.block_layers)
-            self.encoder_layers=nn.ModuleList(self.encoder_layers)
-            self.decoder_layers=nn.ModuleList(self.decoder_layers)
-            self.block_tail_layers=nn.ModuleList(self.block_tail_layers)
-    def forward(self, x):
-        outputs = []
-        for i in range(self.length_of_nplanes-1):
-            x = self.block_layers[i](x)
-            outputs.append(x.features.detach())
-            x = self.encoder_layers[i](x)
-
-        for i in range(self.length_of_nplanes-1):
-            x = self.decoder_layers[i](x)
-            # = ME.SparseTensor(outputs[self.length_of_nplanes-i-2].features, coordinate_manager=x.coordinate_manager,coordinate_map_key=x.coordinate_map_key)
-            outputs[-1]=ME.SparseTensor(outputs[-1], coordinate_manager=x.coordinate_manager,coordinate_map_key=x.coordinate_map_key)
-            u = ME.cat(x,outputs[-1])
-            del outputs[-1]
-            print(i)
-            x = self.block_tail_layers[i](u)
-        return x
 
 class PointGroup(nn.Module):
     def __init__(self, cfg):
@@ -359,8 +34,6 @@ class PointGroup(nn.Module):
         input_c = cfg.input_channel
         m = cfg.m
         classes = cfg.classes
-        block_reps = cfg.block_reps
-        block_residual = cfg.block_residual
 
         self.cluster_radius = cfg.cluster_radius
         self.cluster_meanActive = cfg.cluster_meanActive
@@ -377,23 +50,11 @@ class PointGroup(nn.Module):
         self.pretrain_module = cfg.pretrain_module
         self.fix_module = cfg.fix_module
 
-        #norm_fn = functools.partial(nn.BatchNorm1d, eps=1e-4, momentum=0.1)
-
-        if block_residual:
-            block = ResidualBlock
-        else:
-            block = VGGBlock
-
         if cfg.use_coords:
             input_c += 3
 
         #### backbone
-        self.input_conv = nn.Sequential(
-            ME.MinkowskiConvolution(input_c, m, kernel_size=3, bias=False, dimension =3)
-        )
-
-        #self.unet = UBlock([m, 2*m, 3*m, 4*m, 5*m, 6*m], norm_fn, block_reps, block) #this was here till 7m
-        self.unet = UNet_Big([m, 2*m, 3*m, 4*m, 5*m, 6*m, 7*m], block, D=3)
+        self.unet = load_model('Res16UNet34C')(in_channels=input_c, out_channels=m, config=None)
         self.output_layer = nn.Sequential(
             ME.MinkowskiBatchNorm(m,eps=1e-4),
             ME.MinkowskiReLU()
@@ -411,7 +72,7 @@ class PointGroup(nn.Module):
         self.offset_linear = nn.Linear(m, 3, bias=True)
 
         #### score branch
-        self.score_unet = UNet_small([m, 2*m], block, D=3)
+        self.score_unet = load_model('SmallUNet')(n_planes=m, config=None)
         self.score_outputlayer = nn.Sequential(
             ME.MinkowskiBatchNorm(m,eps=1e-4),
             ME.MinkowskiReLU()
@@ -421,7 +82,7 @@ class PointGroup(nn.Module):
         self.apply(self.set_bn_init)
 
         #### fix parameter
-        module_map = {'input_conv': self.input_conv, 'unet': self.unet, 'output_layer': self.output_layer,
+        module_map = {'unet': self.unet, 'output_layer': self.output_layer,
                       'linear': self.linear, 'offset': self.offset, 'offset_linear': self.offset_linear,
                       'score_unet': self.score_unet, 'score_outputlayer': self.score_outputlayer, 'score_linear': self.score_linear}
 
@@ -508,8 +169,7 @@ class PointGroup(nn.Module):
         '''
         ret = {}
 
-        output = self.input_conv(input)
-        output = self.unet(output)
+        output = self.unet(input)
         output = self.output_layer(output)
         output_feats = output.features[input_map.long()]
         del output
